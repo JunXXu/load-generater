@@ -3,6 +3,7 @@ package loadgenerater
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"load-generater/helper/log"
 	"load-generater/lib"
@@ -75,16 +76,83 @@ func (gen *myGenerator) init() error {
 	return nil
 }
 
+// 打印被忽略的结果
+func (gen *myGenerator) printIgnoredResult(result *lib.CallResult, cause string) {
+	resultMsg := fmt.Sprintf(
+		"ID=%d, Code=%d, Msg=%s, Elapse=%v",
+		result.ID, result.Code, result.Msg, result.Elapse)
+	logger.Warnf("Ignored result: %s. (cause: %s)\n", resultMsg, cause)
+}
+
+// 发送调用结果
+func (gen *myGenerator) sendResult(result *lib.CallResult) bool {
+	if atomic.LoadUint32(&gen.status) != lib.STATUS_STARTED {
+		gen.printIgnoredResult(result, "stopped load generator")
+		return false
+	}
+	select {
+	case gen.resultCh <- result:
+		return true
+	default:
+		gen.printIgnoredResult(result, "result channel full")
+		return false
+	}
+}
+
+// 向载荷承受方发起一次调用
+func (gen *myGenerator) callOne(rawReq *lib.RawReq) *lib.RawResp {
+	// 调用次数加1
+	atomic.AddInt64(&gen.callCount, 1)
+
+	// 合法性检查
+	if rawReq == nil {
+		return &lib.RawResp{Err: fmt.Errorf("invalid raw request."), ID: -1}
+	}
+
+	// 计时并调用
+	start := time.Now().UnixNano()
+	resp, err := gen.caller.Call(rawReq.Req, gen.timeoutNS)
+	end := time.Now().UnixNano()
+	elapsedTime := time.Duration(end - start)
+	var rawResp lib.RawResp
+	if err != nil {
+		errMsg := fmt.Sprintf("Sync Call Error: %s.", err)
+		rawResp = lib.RawResp{Err: errors.New(errMsg), Elapse: elapsedTime, ID: rawReq.ID}
+	} else {
+		rawResp = lib.RawResp{Resp: resp, Elapse: elapsedTime, ID: rawReq.ID}
+	}
+	return &rawResp
+}
+
 // 异步调用承受方接口
 func (gen *myGenerator) asyncCall() {
 	gen.tickets.Take()
 	go func() {
 		defer func() {
+			// 捕获来自调用方的panic
+			if p := recover(); p != nil {
+				err, ok := interface{}(p).(error)
+				var errMsg string
+				if ok {
+					errMsg = fmt.Sprintf("Async Call Panic! (error: %s)", err)
+				} else {
+					errMsg = fmt.Sprintf("Async Call Panic! (clue: %#v)", p)
+				}
+				logger.Errorln(errMsg)
+				// 不确定这里要放回调用结果通道的意义
+				result := &lib.CallResult{
+					ID:   -1,
+					Code: lib.RET_CODE_FATAL_CALL,
+					Msg:  errMsg}
+				gen.sendResult(result)
+			}
 			gen.tickets.Return()
 		}()
+
 		// 构造请求
 		rawReq := gen.caller.BuildReq()
-		// 发送请求，加入超时判断，用time.afterfuncl来修改状态，从而避免使用更多的goroutine实现
+
+		// 发送请求并接收响应，加入超时判断，用time.afterfuncl来修改标识符状态实现，从而避免使用更多的goroutine
 		var callStatus uint32
 		timer := time.AfterFunc(gen.timeoutNS, func() {
 			if !atomic.CompareAndSwapUint32(&callStatus, 0, 2) {
@@ -100,7 +168,7 @@ func (gen *myGenerator) asyncCall() {
 			}
 			gen.sendResult(result)
 		})
-		rawResp := gen.callOne()
+		rawResp := gen.callOne(&rawReq)
 		timer.Stop()
 		if !atomic.CompareAndSwapUint32(&callStatus, 0, 1) {
 			return
@@ -124,17 +192,22 @@ func (gen *myGenerator) asyncCall() {
 // 用于为停止载荷发生器做准备。
 func (gen *myGenerator) prepareToStop(ctxError error) {
 	logger.Infof("Prepare to stop load generator (cause: %s)...", ctxError)
+
 	// 停止时进行两次变更状态
 	atomic.CompareAndSwapUint32(
 		&gen.status, lib.STATUS_STARTED, lib.STATUS_STOPPING)
+
 	logger.Infof("Closing result channel...")
+
 	close(gen.resultCh)
+
 	atomic.StoreUint32(&gen.status, lib.STATUS_STOPPED)
 }
 
 // 生成载荷并向生产方发送
 func (gen *myGenerator) genload(throttle <-chan time.Time) {
 	for {
+		// 由于select是随机的，在开头检查保证能及时停止
 		select {
 		case <-gen.ctx.Done():
 			gen.prepareToStop(gen.ctx.Err())
@@ -172,7 +245,7 @@ func (gen *myGenerator) Start() bool {
 		throttle = time.Tick(interval)
 	}
 
-	// 初始化上下文用于中断goroutine
+	// 初始化上下文用于中断goroutine。代替自己设置定时器，保证不会有其他程序向该通道发送元素，保证信号有效性
 	gen.ctx, gen.cancelFunc = context.WithTimeout(context.Background(), gen.durationNS)
 
 	// 初始化计数器
@@ -189,4 +262,32 @@ func (gen *myGenerator) Start() bool {
 	}()
 
 	return true
+}
+
+func (gen *myGenerator) Stop() bool {
+	// 检查防止重复停止
+	if !atomic.CompareAndSwapUint32(&gen.status, lib.STATUS_STARTED, lib.STATUS_STARTING) {
+		return false
+	}
+
+	// 发送停止信号
+	gen.cancelFunc()
+
+	// 不断检查是否停止
+	for {
+		if atomic.LoadUint32(&gen.status) == lib.STATUS_STOPPED {
+			break
+		}
+		time.Sleep(time.Microsecond)
+	}
+
+	return true
+}
+
+func (gen *myGenerator) Status() uint32 {
+	return atomic.LoadUint32(&gen.status)
+}
+
+func (gen *myGenerator) CallCount() int64 {
+	return atomic.LoadInt64(&gen.callCount)
 }
