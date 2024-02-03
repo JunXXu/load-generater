@@ -50,5 +50,7 @@
 ### 停止
 
 - 超时自动停止
-  - Context.timeout
+  - context.WithTimeout
 - 手动停止
+  - 执行ctx.cancelFunc
+  - 查询发送器状态
