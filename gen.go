@@ -106,7 +106,7 @@ func (gen *myGenerator) callOne(rawReq *lib.RawReq) *lib.RawResp {
 
 	// 合法性检查
 	if rawReq == nil {
-		return &lib.RawResp{Err: fmt.Errorf("invalid raw request."), ID: -1}
+		return &lib.RawResp{Err: fmt.Errorf("invalid raw request"), ID: -1}
 	}
 
 	// 计时并调用
@@ -139,13 +139,14 @@ func (gen *myGenerator) asyncCall() {
 					errMsg = fmt.Sprintf("Async Call Panic! (clue: %#v)", p)
 				}
 				logger.Errorln(errMsg)
-				// 不确定这里要放回调用结果通道的意义
+				// 调用异常结果也要收集
 				result := &lib.CallResult{
 					ID:   -1,
 					Code: lib.RET_CODE_FATAL_CALL,
 					Msg:  errMsg}
 				gen.sendResult(result)
 			}
+
 			gen.tickets.Return()
 		}()
 

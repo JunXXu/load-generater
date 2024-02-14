@@ -19,15 +19,43 @@ type RawResp struct {
 // RetCode 表示结果代码的类型。
 type RetCode int
 
-// 保留 1 ~ 1000 给载荷承受方使用。
+// 保留 1 ~ 1000 给载荷承受方使用
+// 0 成功
+// 1001 调用超时警告
+// 2001 调用错误
+// 2002 响应内容错误
+// 2003 被调用方（被测软件）的内部错误
+// 3001 调用过程中发生了致命错误
 const (
-	RET_CODE_SUCCESS              RetCode = 0    // 成功。
-	RET_CODE_WARNING_CALL_TIMEOUT RetCode = 1001 // 调用超时警告。
-	RET_CODE_ERROR_CALL           RetCode = 2001 // 调用错误。
-	RET_CODE_ERROR_RESPONSE       RetCode = 2002 // 响应内容错误。
-	RET_CODE_ERROR_CALEE          RetCode = 2003 // 被调用方（被测软件）的内部错误。
-	RET_CODE_FATAL_CALL           RetCode = 3001 // 调用过程中发生了致命错误！
+	RET_CODE_SUCCESS              RetCode = 0
+	RET_CODE_WARNING_CALL_TIMEOUT RetCode = 1001
+	RET_CODE_ERROR_CALL           RetCode = 2001
+	RET_CODE_ERROR_RESPONSE       RetCode = 2002
+	RET_CODE_ERROR_CALEE          RetCode = 2003
+	RET_CODE_FATAL_CALL           RetCode = 3001
 )
+
+// GetRetCodePlain 会依据结果代码返回相应的文字解释。
+func GetRetCodePlain(code RetCode) string {
+	var codePlain string
+	switch code {
+	case RET_CODE_SUCCESS:
+		codePlain = "Success"
+	case RET_CODE_WARNING_CALL_TIMEOUT:
+		codePlain = "Call Timeout Warning"
+	case RET_CODE_ERROR_CALL:
+		codePlain = "Call Error"
+	case RET_CODE_ERROR_RESPONSE:
+		codePlain = "Response Error"
+	case RET_CODE_ERROR_CALEE:
+		codePlain = "Callee Error"
+	case RET_CODE_FATAL_CALL:
+		codePlain = "Call Fatal Error"
+	default:
+		codePlain = "Unknown result code"
+	}
+	return codePlain
+}
 
 type CallResult struct {
 	ID     int64         // ID。同一个载荷的请求、响应、调用结果中ID都相同。这对于分布式系统中了解载荷的全过程非常重要。
