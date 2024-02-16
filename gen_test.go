@@ -8,7 +8,7 @@ import (
 )
 
 // printDetail 代表是否打印详细结果。
-var printDetail = false
+var printDetail = true
 
 func TestStart(t *testing.T) {
 
@@ -25,7 +25,7 @@ func TestStart(t *testing.T) {
 	// 初始化载荷发生器。50的并发量
 	pset := ParamSet{
 		Caller:     testhelper.NewTCPComm(serverAddr),
-		TimeoutNS:  50 * time.Millisecond,
+		TimeoutNS:  50 * time.Millisecond, // 50ms
 		LPS:        uint32(1000),
 		DurationNS: 10 * time.Second,
 		ResultCh:   make(chan *lib.CallResult, 50),
@@ -34,8 +34,7 @@ func TestStart(t *testing.T) {
 		pset.TimeoutNS, pset.LPS, pset.DurationNS)
 	gen, err := NewGenerator(pset)
 	if err != nil {
-		t.Fatalf("Load generator initialization failing: %s\n",
-			err)
+		t.Fatalf("Load generator initialization failing: %s\n", err)
 	}
 
 	// 开始！
